@@ -1,0 +1,2 @@
+A Raspberry Pi Linux kernel module that can do user virtual address to bus address translation along with kicking and waiting for DMA.
+Also can allocate kernel logical addresses and map them into user space to provide non-swappable memory.
