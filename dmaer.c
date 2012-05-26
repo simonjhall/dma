@@ -71,8 +71,8 @@ static void VmaClose(struct vm_area_struct *pVma);
 static int VmaFault(struct vm_area_struct *pVma, struct vm_fault *pVmf);
 
 /**** GENERIC ****/
-static int __init hello_init(void);
-static void __exit hello_exit(void);
+static int __init dmaer_init(void);
+static void __exit dmaer_exit(void);
 
 /*** OPS ***/
 static struct vm_operations_struct g_vmOps = {
@@ -122,7 +122,7 @@ static inline unsigned long UserVirtualToBus(void __user *pUser)
 {
 	int mapped;
 	struct page *pPage;
-	unsigned long phys;
+	void *phys;
 
 	//map it (requiring that the pointer points to something that does not hang off the page boundary)
 	mapped = get_user_pages(current, current->mm,
@@ -284,6 +284,11 @@ static struct DmaControlBlock __user *DmaPrepare(struct DmaControlBlock __user *
 		
 	page_cache_release(pSourcePages);
 	page_cache_release(pDestPages);
+
+	if ((unsigned long)pSourceBus != UserVirtualToBusViaCache(kernCB.m_pSourceAddr))
+		printk(KERN_ERR "cache lookup failure source\n");
+	if ((unsigned long)pDestBus != UserVirtualToBusViaCache(kernCB.m_pDestAddr))
+		printk(KERN_ERR "cache lookup failure dest\n");
 	
 	//sort out the bus address for the next block
 	pUNext = kernCB.m_pNext;
@@ -316,6 +321,9 @@ static struct DmaControlBlock __user *DmaPrepare(struct DmaControlBlock __user *
 		
 		kernCB.m_pNext = pNextBus;
 		page_cache_release(pNext);
+
+		if ((unsigned long)pNextBus != UserVirtualToBusViaCache(kernCB.m_pNext))
+			printk(KERN_ERR "cache lookup failure next\n");
 	}
 	
 	//write it back to user space
@@ -356,6 +364,9 @@ static int DmaKick(struct DmaControlBlock __user *pUserCB)
 	
 	pKernCB = page_address(&pBlockPages[0]) + offset_in_page(pUserCB);
 	pBusCB = __virt_to_bus(pKernCB);
+
+	if ((unsigned long)pBusCB != UserVirtualToBusViaCache(pUserCB))
+			printk(KERN_ERR "cache lookup failure cb\n");
 	flush_cache_all();
 #if 1
 	
@@ -413,7 +424,7 @@ static long Ioctl(struct file *pFile, unsigned int cmd, unsigned long arg)
 		{
 			struct DmaControlBlock __user *pUCB = (struct DmaControlBlock *)arg;
 			int steps = 0;
-			unsigned long start_time = jiffies;
+			//unsigned long start_time = jiffies;
 
 			//flush our address cache
 			FlushAddrCache();
@@ -675,9 +686,9 @@ static int VmaFault(struct vm_area_struct *pVma, struct vm_fault *pVmf)
 }
 
 /****** GENERIC FUNCTIONS ******/
-static int __init hello_init(void)
+static int __init dmaer_init(void)
 {
-	int result = alloc_chrdev_region(&g_majorMinor, 0, 1, "hello");
+	int result = alloc_chrdev_region(&g_majorMinor, 0, 1, "dmaer");
 	if (result < 0)
 	{
 		printk(KERN_ERR "unable to get major device number\n");
@@ -691,7 +702,7 @@ static int __init hello_init(void)
 	
 	
 	//get a dma channel to work with
-	result = bcm_dma_chan_alloc(BCM_DMA_FEATURE_FAST, &g_pDmaChanBase, &g_dmaIrq);
+	result = bcm_dma_chan_alloc(BCM_DMA_FEATURE_FAST, (void **)&g_pDmaChanBase, &g_dmaIrq);
 	//result = 0;
 	//g_pDmaChanBase = 0xce808000;
 	
@@ -730,8 +741,9 @@ static int __init hello_init(void)
 	return 0;
 }
 
-static void __exit hello_exit(void)
+static void __exit dmaer_exit(void)
 {
+	printk(KERN_INFO "closing dmaer device, cache stats: %d hits %d misses\n", g_cacheHit, g_cacheMiss);
 	//unregister the device
 	cdev_del(&g_cDev);
 	unregister_chrdev_region(g_majorMinor, 1);
@@ -739,7 +751,7 @@ static void __exit hello_exit(void)
 	bcm_dma_chan_free(g_dmaChan);
 }
 
-MODULE_AUTHOR("simon hall");
-module_init(hello_init);
-module_exit(hello_exit);
+MODULE_AUTHOR("Simon Hall");
+module_init(dmaer_init);
+module_exit(dmaer_exit);
 
