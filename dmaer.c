@@ -118,7 +118,7 @@ static inline void FlushAddrCache(void)
 
 //translate from a user virtual address to a bus address by mapping the page
 //NB this won't lock a page in memory, so to avoid potential paging issues using kernel logical addresses
-static unsigned long UserVirtualToBus(void __user *pUser)
+static void __iomem *UserVirtualToBus(void __user *pUser)
 {
 	int mapped;
 	struct page *pPage;
@@ -139,11 +139,11 @@ static unsigned long UserVirtualToBus(void __user *pUser)
 	page_cache_release(pPage);
 
 	//and now the bus address
-	return __virt_to_bus(phys);
+	return (void __iomem *)__virt_to_bus(phys);
 }
 
 //do the same as above, by query our virt->bus cache
-static unsigned long UserVirtualToBusViaCache(void __user *pUser)
+static void __iomem *UserVirtualToBusViaCache(void __user *pUser)
 {
 	int count;
 	//get the page and its offset
@@ -161,7 +161,7 @@ static unsigned long UserVirtualToBusViaCache(void __user *pUser)
 		}
 
 	//not found, look up manually and then insert its page address
-	bus_addr = UserVirtualToBus(pUser);
+	bus_addr = (unsigned long)UserVirtualToBus(pUser);
 
 	if (!bus_addr)
 		return 0;
@@ -176,7 +176,7 @@ static unsigned long UserVirtualToBusViaCache(void __user *pUser)
 
 	g_cacheMiss++;
 
-	return bus_addr;
+	return (void __iomem *)bus_addr;
 }
 
 /***** FILE OPERATIONS ****/
@@ -208,12 +208,15 @@ static struct DmaControlBlock __user *DmaPrepare(struct DmaControlBlock __user *
 {
 	struct DmaControlBlock kernCB;
 	struct DmaControlBlock __user *pUNext;
-	struct page *pSourcePages, *pDestPages;
 	
+#if 0
+	struct page *pSourcePages, *pDestPages;
 	void *pSourceKern, *pDestKern;
+	int mapped;
+#endif
+
 	void __iomem *pSourceBus, __iomem *pDestBus;
 	
-	int mapped;
 	
 	//get the control block into kernel memory so we can work on it
 	if (copy_from_user(&kernCB, pUserCB, sizeof(struct DmaControlBlock)) != 0)
@@ -231,6 +234,7 @@ static struct DmaControlBlock __user *DmaPrepare(struct DmaControlBlock __user *
 		return 0;
 	}
 	
+#if 0
 	//try and get the struct pages for source/dest
 	mapped = get_user_pages(current, current->mm,
 		(unsigned long)kernCB.m_pSourceAddr, 1,
@@ -285,10 +289,23 @@ static struct DmaControlBlock __user *DmaPrepare(struct DmaControlBlock __user *
 	page_cache_release(pSourcePages);
 	page_cache_release(pDestPages);
 
-	if ((unsigned long)pSourceBus != UserVirtualToBusViaCache(kernCB.m_pSourceAddr))
+	if (pSourceBus != UserVirtualToBusViaCache(kernCB.m_pSourceAddr))
 		printk(KERN_ERR "cache lookup failure source\n");
-	if ((unsigned long)pDestBus != UserVirtualToBusViaCache(kernCB.m_pDestAddr))
+	if (pDestBus != UserVirtualToBusViaCache(kernCB.m_pDestAddr))
 		printk(KERN_ERR "cache lookup failure dest\n");
+#endif
+
+#if 1
+	pSourceBus = UserVirtualToBusViaCache(kernCB.m_pSourceAddr);
+	pDestBus = UserVirtualToBusViaCache(kernCB.m_pDestAddr);
+
+	if (!pSourceBus || !pDestBus)
+	{
+		printk(KERN_ERR "virtual to bus translation failure for source/dest\n");
+		*pError = 1;
+		return 0;
+	}
+#endif
 	
 	//update the user structure with the new bus addresses
 	kernCB.m_pSourceAddr = pSourceBus;
@@ -299,10 +316,13 @@ static struct DmaControlBlock __user *DmaPrepare(struct DmaControlBlock __user *
 	
 	if (kernCB.m_pNext)
 	{
+#if 0
 		struct page *pNext;
 		void *pNextKern;
+#endif
 		void __iomem *pNextBus;
-		
+	
+#if 0
 		mapped = get_user_pages(current, current->mm,
 		(unsigned long)kernCB.m_pNext, 1,
 		1, 0,
@@ -325,9 +345,21 @@ static struct DmaControlBlock __user *DmaPrepare(struct DmaControlBlock __user *
 		
 		page_cache_release(pNext);
 
-		if ((unsigned long)pNextBus != UserVirtualToBusViaCache(kernCB.m_pNext))
+		if (pNextBus != UserVirtualToBusViaCache(kernCB.m_pNext))
 			printk(KERN_ERR "cache lookup failure next\n");
+#endif
+#if 1
+		pNextBus = UserVirtualToBusViaCache(kernCB.m_pNext);
 
+		if (!pNextBus)
+		{
+			printk(KERN_ERR "virtual to bus translation failure for m_pNext\n");
+			*pError = 1;
+			return 0;
+		}
+#endif
+
+		//update the pointer with the bus address
 		kernCB.m_pNext = pNextBus;
 	}
 	
@@ -345,13 +377,16 @@ static struct DmaControlBlock __user *DmaPrepare(struct DmaControlBlock __user *
 
 static int DmaKick(struct DmaControlBlock __user *pUserCB)
 {
+#if 0
 	int mapped;
 	struct page *pBlockPages;
+#endif
 	int counter = 0;
 	volatile unsigned int cs;
 	void *pKernCB, __iomem *pBusCB;
 	unsigned long time_before, time_after;
 	
+#if 0
 	//ensure we can get the bus address for the page
 	mapped = get_user_pages(current, current->mm,
 		(unsigned long)pUserCB, 1,
@@ -370,8 +405,19 @@ static int DmaKick(struct DmaControlBlock __user *pUserCB)
 	pKernCB = page_address(&pBlockPages[0]) + offset_in_page(pUserCB);
 	pBusCB = __virt_to_bus(pKernCB);
 
-	if ((unsigned long)pBusCB != UserVirtualToBusViaCache(pUserCB))
+	page_cache_release(pBlockPages);
+
+	if (pBusCB != UserVirtualToBusViaCache(pUserCB))
 			printk(KERN_ERR "cache lookup failure cb\n");
+#endif
+#if 1
+	pBusCB = UserVirtualToBusViaCache(pUserCB);
+	if (!pBusCB)
+	{
+		printk(KERN_ERR "virtual to bus translation failure for cb\n");
+		return 1;
+	}
+#endif
 	flush_cache_all();
 #if 1
 	
@@ -409,9 +455,7 @@ static int DmaKick(struct DmaControlBlock __user *pUserCB)
 	//printk(KERN_DEBUG "took %ld jiffies, %d HZ\n", time_after - time_before, HZ);
 	
 	//flush_cache_all();
-#endif	
-	
-	page_cache_release(pBlockPages);
+#endif
 	
 	return 0;
 }
