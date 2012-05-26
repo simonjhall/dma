@@ -103,6 +103,8 @@ static int g_dmaChan;
 
 static unsigned long g_virtAddr[VIRT_TO_BUS_CACHE_SIZE];
 static unsigned long g_busAddr[VIRT_TO_BUS_CACHE_SIZE];
+static unsigned long g_cbVirtAddr;
+static unsigned long g_cbBusAddr;
 static int g_cacheInsertAt;
 static int g_cacheHit, g_cacheMiss;
 
@@ -113,12 +115,14 @@ static inline void FlushAddrCache(void)
 	for (count = 0; count < VIRT_TO_BUS_CACHE_SIZE; count++)
 		g_virtAddr[count] = 0xffffffff;			//never going to match as we always chop the bottom bits anyway
 
+	g_cbVirtAddr = 0xffffffff;
+
 	g_cacheInsertAt = 0;
 }
 
 //translate from a user virtual address to a bus address by mapping the page
 //NB this won't lock a page in memory, so to avoid potential paging issues using kernel logical addresses
-static void __iomem *UserVirtualToBus(void __user *pUser)
+static inline void __iomem *UserVirtualToBus(void __user *pUser)
 {
 	int mapped;
 	struct page *pPage;
@@ -142,8 +146,35 @@ static void __iomem *UserVirtualToBus(void __user *pUser)
 	return (void __iomem *)__virt_to_bus(phys);
 }
 
+static inline void __iomem *UserVirtualToBusViaCbCache(void __user *pUser)
+{
+	unsigned long virtual_page = (unsigned long)pUser & ~4095;
+	unsigned long page_offset = (unsigned long)pUser & 4095;
+	unsigned long bus_addr;
+
+	if (g_cbVirtAddr == virtual_page)
+	{
+		bus_addr = g_cbBusAddr + page_offset;
+		g_cacheHit++;
+		return (void __iomem *)bus_addr;
+	}
+	else
+	{
+		bus_addr = (unsigned long)UserVirtualToBus(pUser);
+		
+		if (!bus_addr)
+			return 0;
+		
+		g_cbVirtAddr = virtual_page;
+		g_cbBusAddr = bus_addr & ~4095;
+		g_cacheMiss++;
+
+		return (void __iomem *)bus_addr;
+	}
+}
+
 //do the same as above, by query our virt->bus cache
-static void __iomem *UserVirtualToBusViaCache(void __user *pUser)
+static inline void __iomem *UserVirtualToBusViaCache(void __user *pUser)
 {
 	int count;
 	//get the page and its offset
@@ -157,7 +188,7 @@ static void __iomem *UserVirtualToBusViaCache(void __user *pUser)
 		{
 			bus_addr = g_busAddr[count] + page_offset;
 			g_cacheHit++;
-			return bus_addr;
+			return (void __iomem *)bus_addr;
 		}
 
 	//not found, look up manually and then insert its page address
@@ -345,11 +376,11 @@ static struct DmaControlBlock __user *DmaPrepare(struct DmaControlBlock __user *
 		
 		page_cache_release(pNext);
 
-		if (pNextBus != UserVirtualToBusViaCache(kernCB.m_pNext))
+		if (pNextBus != UserVirtualToBusViaCbCache(kernCB.m_pNext))
 			printk(KERN_ERR "cache lookup failure next\n");
 #endif
 #if 1
-		pNextBus = UserVirtualToBusViaCache(kernCB.m_pNext);
+		pNextBus = UserVirtualToBusViaCbCache(kernCB.m_pNext);
 
 		if (!pNextBus)
 		{
@@ -383,7 +414,7 @@ static int DmaKick(struct DmaControlBlock __user *pUserCB)
 #endif
 	int counter = 0;
 	volatile unsigned int cs;
-	void *pKernCB, __iomem *pBusCB;
+	void /* *pKernCB,*/ __iomem *pBusCB;
 	unsigned long time_before, time_after;
 	
 #if 0
@@ -407,11 +438,11 @@ static int DmaKick(struct DmaControlBlock __user *pUserCB)
 
 	page_cache_release(pBlockPages);
 
-	if (pBusCB != UserVirtualToBusViaCache(pUserCB))
+	if (pBusCB != UserVirtualToBusViaCbCache(pUserCB))
 			printk(KERN_ERR "cache lookup failure cb\n");
 #endif
 #if 1
-	pBusCB = UserVirtualToBusViaCache(pUserCB);
+	pBusCB = UserVirtualToBusViaCbCache(pUserCB);
 	if (!pBusCB)
 	{
 		printk(KERN_ERR "virtual to bus translation failure for cb\n");
