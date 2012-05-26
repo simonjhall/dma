@@ -118,7 +118,7 @@ static inline void FlushAddrCache(void)
 
 //translate from a user virtual address to a bus address by mapping the page
 //NB this won't lock a page in memory, so to avoid potential paging issues using kernel logical addresses
-static inline unsigned long UserVirtualToBus(void __user *pUser)
+static unsigned long UserVirtualToBus(void __user *pUser)
 {
 	int mapped;
 	struct page *pPage;
@@ -143,7 +143,7 @@ static inline unsigned long UserVirtualToBus(void __user *pUser)
 }
 
 //do the same as above, by query our virt->bus cache
-static inline unsigned long UserVirtualToBusViaCache(void __user *pUser)
+static unsigned long UserVirtualToBusViaCache(void __user *pUser)
 {
 	int count;
 	//get the page and its offset
@@ -162,6 +162,10 @@ static inline unsigned long UserVirtualToBusViaCache(void __user *pUser)
 
 	//not found, look up manually and then insert its page address
 	bus_addr = UserVirtualToBus(pUser);
+
+	if (!bus_addr)
+		return 0;
+
 	g_virtAddr[g_cacheInsertAt] = virtual_page;
 	g_busAddr[g_cacheInsertAt] = bus_addr & ~4095;
 
@@ -278,10 +282,6 @@ static struct DmaControlBlock __user *DmaPrepare(struct DmaControlBlock __user *
 	//	kernCB.m_pDestAddr, pDestKern, pDestBus,
 	//	pUserCB);
 		
-	//update the user structure with the new bus addresses
-	kernCB.m_pSourceAddr = pSourceBus;
-	kernCB.m_pDestAddr = pDestBus;
-		
 	page_cache_release(pSourcePages);
 	page_cache_release(pDestPages);
 
@@ -290,6 +290,10 @@ static struct DmaControlBlock __user *DmaPrepare(struct DmaControlBlock __user *
 	if ((unsigned long)pDestBus != UserVirtualToBusViaCache(kernCB.m_pDestAddr))
 		printk(KERN_ERR "cache lookup failure dest\n");
 	
+	//update the user structure with the new bus addresses
+	kernCB.m_pSourceAddr = pSourceBus;
+	kernCB.m_pDestAddr = pDestBus;
+		
 	//sort out the bus address for the next block
 	pUNext = kernCB.m_pNext;
 	
@@ -319,11 +323,12 @@ static struct DmaControlBlock __user *DmaPrepare(struct DmaControlBlock __user *
 		
 		//printk(KERN_DEBUG "next CB at user %p kernel %p bus %p\n", pUNext, pNextKern, pNextBus);
 		
-		kernCB.m_pNext = pNextBus;
 		page_cache_release(pNext);
 
 		if ((unsigned long)pNextBus != UserVirtualToBusViaCache(kernCB.m_pNext))
 			printk(KERN_ERR "cache lookup failure next\n");
+
+		kernCB.m_pNext = pNextBus;
 	}
 	
 	//write it back to user space
