@@ -56,6 +56,8 @@ struct DmaControlBlock
 #define DMA_WAIT_ONE	_IOW(DMA_MAGIC, 3, struct DmaControlBlock *)
 #define DMA_WAIT_ALL	_IO(DMA_MAGIC, 4)
 
+#define VIRT_TO_BUS_CACHE_SIZE 8
+
 /***** FILE OPS *****/
 static int Open(struct inode *pInode, struct file *pFile);
 static int Release(struct inode *pInode, struct file *pFile);
@@ -99,11 +101,86 @@ static unsigned int *g_pDmaChanBase;
 static int g_dmaIrq;
 static int g_dmaChan;
 
+static unsigned long g_virtAddr[VIRT_TO_BUS_CACHE_SIZE];
+static unsigned long g_busAddr[VIRT_TO_BUS_CACHE_SIZE];
+static int g_cacheInsertAt;
+static int g_cacheHit, g_cacheMiss;
+
+/****** CACHE OPERATIONS ********/
+static inline void FlushAddrCache(void)
+{
+	int count = 0;
+	for (count = 0; count < VIRT_TO_BUS_CACHE_SIZE; count++)
+		g_virtAddr[count] = 0xffffffff;			//never going to match as we always chop the bottom bits anyway
+
+	g_cacheInsertAt = 0;
+}
+
+//translate from a user virtual address to a bus address by mapping the page
+//NB this won't lock a page in memory, so to avoid potential paging issues using kernel logical addresses
+static inline unsigned long UserVirtualToBus(void __user *pUser)
+{
+	int mapped;
+	struct page *pPage;
+	unsigned long phys;
+
+	//map it (requiring that the pointer points to something that does not hang off the page boundary)
+	mapped = get_user_pages(current, current->mm,
+		(unsigned long)pUser, 1,
+		1, 0,
+		&pPage,
+		0);
+
+	if (!mapped)		//error
+		return 0;
+
+	//get the arm physical address
+	phys = page_address(pPage) + offset_in_page(pUser);
+	page_cache_release(pPage);
+
+	//and now the bus address
+	return __virt_to_bus(phys);
+}
+
+//do the same as above, by query our virt->bus cache
+static inline unsigned long UserVirtualToBusViaCache(void __user *pUser)
+{
+	int count;
+	//get the page and its offset
+	unsigned long virtual_page = (unsigned long)pUser & ~4095;
+	unsigned long page_offset = (unsigned long)pUser & 4095;
+	unsigned long bus_addr;
+
+	//check the cache for our entry
+	for (count = 0; count < VIRT_TO_BUS_CACHE_SIZE; count++)
+		if (g_virtAddr[count] == virtual_page)
+		{
+			bus_addr = g_busAddr[count] + page_offset;
+			g_cacheHit++;
+			return bus_addr;
+		}
+
+	//not found, look up manually and then insert its page address
+	bus_addr = UserVirtualToBus(pUser);
+	g_virtAddr[g_cacheInsertAt] = virtual_page;
+	g_busAddr[g_cacheInsertAt] = bus_addr & ~4095;
+
+	//round robin
+	g_cacheInsertAt++;
+	if (g_cacheInsertAt == VIRT_TO_BUS_CACHE_SIZE)
+		g_cacheInsertAt = 0;
+
+	g_cacheMiss++;
+
+	return bus_addr;
+}
+
 /***** FILE OPERATIONS ****/
 static int Open(struct inode *pInode, struct file *pFile)
 {
 	printk(KERN_DEBUG "file opening\n");
 	
+	//only one at a time
 	if (!atomic_dec_and_test(&g_oneLock))
 	{
 		atomic_inc(&g_oneLock);
@@ -116,6 +193,8 @@ static int Open(struct inode *pInode, struct file *pFile)
 static int Release(struct inode *pInode, struct file *pFile)
 {
 	printk(KERN_DEBUG "file closing, %d pages tracked\n", g_trackedPages);
+	if (g_trackedPages)
+		printk(KERN_ERR "we\'re leaking memory!\n");
 	
 	atomic_inc(&g_oneLock);
 	return 0;
@@ -335,18 +414,29 @@ static long Ioctl(struct file *pFile, unsigned int cmd, unsigned long arg)
 			struct DmaControlBlock __user *pUCB = (struct DmaControlBlock *)arg;
 			int steps = 0;
 			unsigned long start_time = jiffies;
+
+			//flush our address cache
+			FlushAddrCache();
+
 			//printk(KERN_DEBUG "dma prepare\n");
 			
+			//do virtual to bus translation for each entry
 			do
 			{
 				pUCB = DmaPrepare(pUCB, &error);
 			} while (error == 0 && ++steps && pUCB);
 			//printk(KERN_DEBUG "prepare done in %d steps, %ld\n", steps, jiffies - start_time);
-			if (cmd != DMA_PREPARE_KICK_WAIT)
+
+			//carry straight on if we want to kick too
+			if (cmd == DMA_PREPARE)
 				break;
 		};
 	case DMA_KICK:
 		//printk(KERN_DEBUG "dma begin\n");
+
+		if (cmd == DMA_KICK)
+			FlushAddrCache();
+
 		DmaKick((struct DmaControlBlock __user *)arg);
 		break;
 	case DMA_WAIT_ONE:
@@ -599,18 +689,8 @@ static int __init hello_init(void)
 	printk(KERN_DEBUG "vma list size %d, page list size %d, page size %ld\n",
 		sizeof(struct VmaPageList), sizeof(struct PageList), PAGE_SIZE);
 	
-	cdev_init(&g_cDev, &g_fOps);
-	g_cDev.owner = THIS_MODULE;
-	g_cDev.ops = &g_fOps;
 	
-	result = cdev_add (&g_cDev, g_majorMinor, 1);
-	if (result < 0)
-	{
-		printk(KERN_ERR "failed to add character device\n");
-		unregister_chrdev_region(g_majorMinor, 1);
-		return result;
-	}
-	
+	//get a dma channel to work with
 	result = bcm_dma_chan_alloc(BCM_DMA_FEATURE_FAST, &g_pDmaChanBase, &g_dmaIrq);
 	//result = 0;
 	//g_pDmaChanBase = 0xce808000;
@@ -622,19 +702,40 @@ static int __init hello_init(void)
 		unregister_chrdev_region(g_majorMinor, 1);
 	}
 	
+	//reset the channel
 	printk(KERN_DEBUG "allocated dma channel %d (%p), initial state %08x\n", result, g_pDmaChanBase, *g_pDmaChanBase);
 	*g_pDmaChanBase = 1 << 31;
 	printk(KERN_DEBUG "post-reset %08x\n", *g_pDmaChanBase);
 	
 	g_dmaChan = result;
+
+	//clear the cache stats
+	g_cacheHit = 0;
+	g_cacheMiss = 0;
+
+	//register our device - after this we are go go go
+	cdev_init(&g_cDev, &g_fOps);
+	g_cDev.owner = THIS_MODULE;
+	g_cDev.ops = &g_fOps;
+	
+	result = cdev_add(&g_cDev, g_majorMinor, 1);
+	if (result < 0)
+	{
+		printk(KERN_ERR "failed to add character device\n");
+		unregister_chrdev_region(g_majorMinor, 1);
+		bcm_dma_chan_free(g_dmaChan);
+		return result;
+	}
 		
 	return 0;
 }
 
 static void __exit hello_exit(void)
 {
+	//unregister the device
 	cdev_del(&g_cDev);
 	unregister_chrdev_region(g_majorMinor, 1);
+	//free the dma channel
 	bcm_dma_chan_free(g_dmaChan);
 }
 
