@@ -21,6 +21,8 @@
 
 MODULE_LICENSE("Dual BSD/GPL");
 
+//#define inline 
+
 /***** TYPES ****/
 #define PAGES_PER_LIST 500
 struct PageList
@@ -52,9 +54,10 @@ struct DmaControlBlock
 #define DMA_MAGIC		0xdd
 #define DMA_PREPARE		_IOW(DMA_MAGIC, 0, struct DmaControlBlock *)
 #define DMA_KICK		_IOW(DMA_MAGIC, 1, struct DmaControlBlock *)
-#define DMA_PREPARE_KICK_WAIT	 _IOW(DMA_MAGIC, 2, struct DmaControlBlock *)
-#define DMA_WAIT_ONE	_IOW(DMA_MAGIC, 3, struct DmaControlBlock *)
-#define DMA_WAIT_ALL	_IO(DMA_MAGIC, 4)
+#define DMA_PREPARE_KICK_WAIT	_IOW(DMA_MAGIC, 2, struct DmaControlBlock *)
+#define DMA_PREPARE_KICK	_IOW(DMA_MAGIC, 3, struct DmaControlBlock *)
+#define DMA_WAIT_ONE		_IOW(DMA_MAGIC, 4, struct DmaControlBlock *)
+#define DMA_WAIT_ALL		_IO(DMA_MAGIC, 5)
 
 #define VIRT_TO_BUS_CACHE_SIZE 8
 
@@ -298,17 +301,16 @@ static struct DmaControlBlock __user *DmaPrepare(struct DmaControlBlock __user *
 		*pError = 1;
 		return 0;
 	}
-	
+
+	__cpuc_flush_dcache_area(pUserCB, 32);
+
 	*pError = 0;
 	return pUNext;
 }
 
 static int DmaKick(struct DmaControlBlock __user *pUserCB)
 {
-	int counter = 0;
-	volatile unsigned int cs;
 	void __iomem *pBusCB;
-	unsigned long time_before, time_after;
 	
 	pBusCB = UserVirtualToBusViaCbCache(pUserCB);
 	if (!pBusCB)
@@ -317,12 +319,20 @@ static int DmaKick(struct DmaControlBlock __user *pUserCB)
 		return 1;
 	}
 
-	flush_cache_all();
+	//flush_cache_all();
 
-	time_before = jiffies;
-	
 	bcm_dma_start(g_pDmaChanBase, (dma_addr_t)pBusCB);
 	
+	return 0;
+}
+
+static void DmaWaitAll(void)
+{
+	int counter = 0;
+	volatile unsigned int cs;
+	//unsigned long time_before, time_after;
+
+	//time_before = jiffies;
 	//bcm_dma_wait_idle(g_pDmaChanBase);
 	dsb();
 	
@@ -332,25 +342,25 @@ static int DmaKick(struct DmaControlBlock __user *pUserCB)
 	{
 		cs = readl(g_pDmaChanBase);
 		counter++;
+		asm volatile ("MCR p15,0,r0,c7,c0,4 \n");
+		//cpu_do_idle();
 		if (counter >= 1000000)
 			break;
 	}
-	time_after = jiffies;
+	//time_after = jiffies;
 	//printk(KERN_DEBUG "done, counter %d, cs %08x", counter, cs);
 	//printk(KERN_DEBUG "took %ld jiffies, %d HZ\n", time_after - time_before, HZ);
-	
-	return 0;
 }
-
 
 static long Ioctl(struct file *pFile, unsigned int cmd, unsigned long arg)
 {
 	int error = 0;
-//	printk(KERN_DEBUG "ioctl cmd %x arg %lx\n", cmd, arg);
+	//printk(KERN_DEBUG "ioctl cmd %x arg %lx\n", cmd, arg);
 
 	switch (cmd)
 	{
 	case DMA_PREPARE:
+	case DMA_PREPARE_KICK:
 	case DMA_PREPARE_KICK_WAIT:
 		{
 			struct DmaControlBlock __user *pUCB = (struct DmaControlBlock *)arg;
@@ -360,7 +370,7 @@ static long Ioctl(struct file *pFile, unsigned int cmd, unsigned long arg)
 			//flush our address cache
 			FlushAddrCache();
 
-			//printk(KERN_DEBUG "dma prepare\n");
+//			printk(KERN_DEBUG "dma prepare\n");
 			
 			//do virtual to bus translation for each entry
 			do
@@ -370,22 +380,28 @@ static long Ioctl(struct file *pFile, unsigned int cmd, unsigned long arg)
 			//printk(KERN_DEBUG "prepare done in %d steps, %ld\n", steps, jiffies - start_time);
 
 			//carry straight on if we want to kick too
-			if (cmd == DMA_PREPARE)
+			if (cmd == DMA_PREPARE || error)
+			{
+//				printk(KERN_DEBUG "falling out\n");
 				break;
+			}
 		};
 	case DMA_KICK:
-		//printk(KERN_DEBUG "dma begin\n");
+//		printk(KERN_DEBUG "dma begin\n");
 
 		if (cmd == DMA_KICK)
 			FlushAddrCache();
 
 		DmaKick((struct DmaControlBlock __user *)arg);
-		break;
-	case DMA_WAIT_ONE:
+		
+		if (cmd != DMA_PREPARE_KICK_WAIT)
+			break;
+/*	case DMA_WAIT_ONE:
 		//printk(KERN_DEBUG "dma wait one\n");
-		break;
+		break;*/
 	case DMA_WAIT_ALL:
 		//printk(KERN_DEBUG "dma wait all\n");
+		DmaWaitAll();
 		break;
 	default:
 		return -EINVAL;
