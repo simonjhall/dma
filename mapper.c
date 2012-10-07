@@ -28,13 +28,16 @@
 #include <stropts.h>
 #include <asm-generic/ioctl.h>
 #include <time.h>
+#include <sys/time.h>
 
 /***** DEFINES ******/
-#define DMA_MAGIC		0xdd
-#define DMA_PREPARE		_IOW(DMA_MAGIC, 0, struct DmaControlBlock *)
-#define DMA_KICK		_IOW(DMA_MAGIC, 1, struct DmaControlBlock *)
-#define DMA_WAIT_ONE	_IOW(DMA_MAGIC, 2, struct DmaControlBlock *)
-#define DMA_WAIT_ALL	_IO(DMA_MAGIC, 3)
+#define DMA_MAGIC       0xdd
+#define DMA_PREPARE     _IOW(DMA_MAGIC, 0, struct DmaControlBlock *)
+#define DMA_KICK        _IOW(DMA_MAGIC, 1, struct DmaControlBlock *)
+#define DMA_PREPARE_KICK_WAIT   _IOW(DMA_MAGIC, 2, struct DmaControlBlock *)
+#define DMA_PREPARE_KICK    _IOW(DMA_MAGIC, 3, struct DmaControlBlock *)
+#define DMA_WAIT_ONE        _IOW(DMA_MAGIC, 4, struct DmaControlBlock *)
+#define DMA_WAIT_ALL        _IO(DMA_MAGIC, 5)
 
 struct DmaControlBlock
 {
@@ -101,7 +104,7 @@ int main(int argc, char **argv)
     void *address;
     int err;
     
-    const unsigned int transfer_size = 75 * 1024 * 1024;
+    const unsigned int transfer_size = 64 * 1024 * 1024;
     
     srand(time(0));
 
@@ -154,21 +157,36 @@ int main(int argc, char **argv)
    }
    pHead[count - 1].m_pNext = 0;
 
-    time_t start = clock();
+    struct timeval start;
+    gettimeofday(&start, 0);
+    
     err = ioctl(fileno(f), DMA_PREPARE, address);
     if (err == -1)
     	fprintf(stderr, "dma prepare err %d\n", errno);
-    time_t mid = clock();
+    
+    struct timeval mid;
+    gettimeofday(&mid, 0);
     
     err = ioctl(fileno(f), DMA_KICK, address);
     if (err == -1)
     	fprintf(stderr, "dma kick err %d\n", errno);
 
-    time_t end = clock();
+//    time_t end = clock();
+    
+    ioctl(fileno(f), DMA_WAIT_ALL, address);
+    
+    struct timeval wait;
+    gettimeofday(&wait, 0);
 
-    fprintf(stderr, "prepare took %.3f ms, kick took %.3f ms\n",
-	(float)(end - mid) / CLOCKS_PER_SEC * 1000.0f,
-	(float)(mid - start) / CLOCKS_PER_SEC * 1000.0f);
+    fprintf(stderr, "prepare took %d us, kick and wait took %d us\n",
+    	(int)((mid.tv_sec-start.tv_sec)*1000000ULL+(mid.tv_usec-start.tv_usec)),
+    	(int)((wait.tv_sec-mid.tv_sec)*1000000ULL+(wait.tv_usec-mid.tv_usec)));
+    fprintf(stderr, "prepare %.2f us/CB, k&w took %.2f us/CB\n",
+    	(double)((mid.tv_sec-start.tv_sec)*1000000ULL+(mid.tv_usec-start.tv_usec)) / (transfer_size / 4096),
+    	(double)((wait.tv_sec-mid.tv_sec)*1000000ULL+(wait.tv_usec-mid.tv_usec)) / (transfer_size / 4096));
+    fprintf(stderr, "aggregate %.2f MB/s\n", (double)transfer_size / (int)((wait.tv_sec-start.tv_sec)*1000000ULL+(wait.tv_usec-start.tv_usec)));
+    	
+    	
     
  /*   fprintf(stderr, "0\n");
    for (count = 0; count < 16; count++)
