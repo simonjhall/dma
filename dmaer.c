@@ -138,7 +138,7 @@ static inline void __iomem *UserVirtualToBus(void __user *pUser)
 		&pPage,
 		0);
 
-	if (!mapped)		//error
+	if (mapped <= 0)		//error
 		return 0;
 
 	//get the arm physical address
@@ -329,6 +329,7 @@ static int DmaKick(struct DmaControlBlock __user *pUserCB)
 static void DmaWaitAll(void)
 {
 	int counter = 0;
+	volatile int inner_count;
 	volatile unsigned int cs;
 	//unsigned long time_before, time_after;
 
@@ -342,10 +343,16 @@ static void DmaWaitAll(void)
 	{
 		cs = readl(g_pDmaChanBase);
 		counter++;
+
+		for (inner_count = 0; inner_count < 32; inner_count++);
+
 		asm volatile ("MCR p15,0,r0,c7,c0,4 \n");
 		//cpu_do_idle();
 		if (counter >= 1000000)
+		{
+			printk(KERN_WARNING "DMA failed to finish in a timely fashion\n");
 			break;
+		}
 	}
 	//time_after = jiffies;
 	//printk(KERN_DEBUG "done, counter %d, cs %08x", counter, cs);
