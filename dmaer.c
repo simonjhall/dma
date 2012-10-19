@@ -51,13 +51,33 @@ struct DmaControlBlock
 };
 
 /***** DEFINES ******/
+//magic number defining the module
 #define DMA_MAGIC		0xdd
-#define DMA_PREPARE		_IOW(DMA_MAGIC, 0, struct DmaControlBlock *)
+
+//do user virtual to physical translation of the CB chain
+#define DMA_PREPARE		_IOWR(DMA_MAGIC, 0, struct DmaControlBlock *)
+
+//kick the pre-prepared CB chain
 #define DMA_KICK		_IOW(DMA_MAGIC, 1, struct DmaControlBlock *)
-#define DMA_PREPARE_KICK_WAIT	_IOW(DMA_MAGIC, 2, struct DmaControlBlock *)
-#define DMA_PREPARE_KICK	_IOW(DMA_MAGIC, 3, struct DmaControlBlock *)
-#define DMA_WAIT_ONE		_IOW(DMA_MAGIC, 4, struct DmaControlBlock *)
+
+//prepare it, kick it, wait for it
+#define DMA_PREPARE_KICK_WAIT	_IOWR(DMA_MAGIC, 2, struct DmaControlBlock *)
+
+//prepare it, kick it, don't wait for it
+#define DMA_PREPARE_KICK	_IOWR(DMA_MAGIC, 3, struct DmaControlBlock *)
+
+//not currently implemented
+#define DMA_WAIT_ONE		_IO(DMA_MAGIC, 4, struct DmaControlBlock *)
+
+//wait on all kicked CB chains
 #define DMA_WAIT_ALL		_IO(DMA_MAGIC, 5)
+
+//in order to discover the largest AXI burst that should be programmed into the transfer params
+#define DMA_MAX_BURST		_IO(DMA_MAGIC, 6)
+
+//set the address range through which the user address is assumed to already by a physical address
+#define DMA_SET_MIN_PHYS	_IOW(DMA_MAGIC, 7, unsigned long)
+#define DMA_SET_MAX_PHYS	_IOW(DMA_MAGIC, 8, unsigned long)
 
 #define VIRT_TO_BUS_CACHE_SIZE 8
 
@@ -110,6 +130,10 @@ static unsigned long g_cbVirtAddr;
 static unsigned long g_cbBusAddr;
 static int g_cacheInsertAt;
 static int g_cacheHit, g_cacheMiss;
+
+//off by default
+static void __user *g_pMinPhys = (void __user *)-1;
+static void __user *g_pMaxPhys = (void __user *)0;
 
 /****** CACHE OPERATIONS ********/
 static inline void FlushAddrCache(void)
@@ -184,6 +208,12 @@ static inline void __iomem *UserVirtualToBusViaCache(void __user *pUser)
 	unsigned long virtual_page = (unsigned long)pUser & ~4095;
 	unsigned long page_offset = (unsigned long)pUser & 4095;
 	unsigned long bus_addr;
+
+	if (pUser >= g_pMinPhys && pUser < g_pMaxPhys)
+	{
+//		printk(KERN_DEBUG "user->phys passthrough on %p\n", pUser);
+		return (void __iomem *)__virt_to_bus(pUser);
+	}
 
 	//check the cache for our entry
 	for (count = 0; count < VIRT_TO_BUS_CACHE_SIZE; count++)
@@ -410,7 +440,21 @@ static long Ioctl(struct file *pFile, unsigned int cmd, unsigned long arg)
 		//printk(KERN_DEBUG "dma wait all\n");
 		DmaWaitAll();
 		break;
+	case DMA_MAX_BURST:
+		if (g_dmaChan == 0)
+			return 10;
+		else
+			return 5;
+	case DMA_SET_MIN_PHYS:
+		g_pMinPhys = (void __user *)arg;
+		printk("min/max user/phys bypass set to %p %p\n", g_pMinPhys, g_pMaxPhys);
+		break;
+	case DMA_SET_MAX_PHYS:
+		g_pMaxPhys = (void __user *)arg;
+		printk("min/max user/phys bypass set to %p %p\n", g_pMinPhys, g_pMaxPhys);
+		break;
 	default:
+		printk(KERN_DEBUG "unknown ioctl: %d\n", cmd);
 		return -EINVAL;
 	}
 
