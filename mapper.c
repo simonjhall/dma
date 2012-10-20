@@ -109,7 +109,7 @@ inline void CopyLinear(struct DmaControlBlock *pCB,
 				fprintf(stderr, "\tstraddles %ld pages\n", dest_end - dest_start);
 	}
 
-	pCB->m_transferInfo = (srcInc << 8) | (1 << 4) | (11 << 12) | (1 << 9) | (1 << 5);
+	pCB->m_transferInfo = (srcInc << 8) | (1 << 4) | (5 << 12) | (1 << 9) | (1 << 5);
 	pCB->m_pSourceAddr = pSourceAddr;
 	pCB->m_pDestAddr = pDestAddr;
 	pCB->m_xferLen = length;
