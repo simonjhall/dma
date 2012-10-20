@@ -31,13 +31,34 @@
 #include <sys/time.h>
 
 /***** DEFINES ******/
-#define DMA_MAGIC       0xdd
-#define DMA_PREPARE     _IOW(DMA_MAGIC, 0, struct DmaControlBlock *)
-#define DMA_KICK        _IOW(DMA_MAGIC, 1, struct DmaControlBlock *)
-#define DMA_PREPARE_KICK_WAIT   _IOW(DMA_MAGIC, 2, struct DmaControlBlock *)
-#define DMA_PREPARE_KICK    _IOW(DMA_MAGIC, 3, struct DmaControlBlock *)
-#define DMA_WAIT_ONE        _IOW(DMA_MAGIC, 4, struct DmaControlBlock *)
-#define DMA_WAIT_ALL        _IO(DMA_MAGIC, 5)
+/***** DEFINES ******/
+//magic number defining the module
+#define DMA_MAGIC		0xdd
+
+//do user virtual to physical translation of the CB chain
+#define DMA_PREPARE		_IOWR(DMA_MAGIC, 0, struct DmaControlBlock *)
+
+//kick the pre-prepared CB chain
+#define DMA_KICK		_IOW(DMA_MAGIC, 1, struct DmaControlBlock *)
+
+//prepare it, kick it, wait for it
+#define DMA_PREPARE_KICK_WAIT	_IOWR(DMA_MAGIC, 2, struct DmaControlBlock *)
+
+//prepare it, kick it, don't wait for it
+#define DMA_PREPARE_KICK	_IOWR(DMA_MAGIC, 3, struct DmaControlBlock *)
+
+//not currently implemented
+#define DMA_WAIT_ONE		_IO(DMA_MAGIC, 4, struct DmaControlBlock *)
+
+//wait on all kicked CB chains
+#define DMA_WAIT_ALL		_IO(DMA_MAGIC, 5)
+
+//in order to discover the largest AXI burst that should be programmed into the transfer params
+#define DMA_MAX_BURST		_IO(DMA_MAGIC, 6)
+
+//set the address range through which the user address is assumed to already by a physical address
+#define DMA_SET_MIN_PHYS	_IOW(DMA_MAGIC, 7, unsigned long)
+#define DMA_SET_MAX_PHYS	_IOW(DMA_MAGIC, 8, unsigned long)
 
 struct DmaControlBlock
 {
@@ -88,7 +109,7 @@ inline void CopyLinear(struct DmaControlBlock *pCB,
 				fprintf(stderr, "\tstraddles %ld pages\n", dest_end - dest_start);
 	}
 
-	pCB->m_transferInfo = (srcInc << 8) | (1 << 4) | (5 << 12) | (1 << 9) | (1 << 5);
+	pCB->m_transferInfo = (srcInc << 8) | (1 << 4) | (11 << 12) | (1 << 9) | (1 << 5);
 	pCB->m_pSourceAddr = pSourceAddr;
 	pCB->m_pDestAddr = pDestAddr;
 	pCB->m_xferLen = length;
@@ -104,7 +125,7 @@ int main(int argc, char **argv)
     void *address;
     int err;
     
-    const unsigned int transfer_size = 64 * 1024 * 1024;
+    const unsigned int transfer_size = 32 * 1024 * 1024;
     
     srand(time(0));
 
@@ -184,6 +205,7 @@ int main(int argc, char **argv)
     fprintf(stderr, "prepare %.2f us/CB, k&w took %.2f us/CB\n",
     	(double)((mid.tv_sec-start.tv_sec)*1000000ULL+(mid.tv_usec-start.tv_usec)) / (transfer_size / 4096),
     	(double)((wait.tv_sec-mid.tv_sec)*1000000ULL+(wait.tv_usec-mid.tv_usec)) / (transfer_size / 4096));
+    fprintf(stderr, "actual %.2f MB/s\n", (double)transfer_size / (int)((wait.tv_sec-mid.tv_sec)*1000000ULL+(wait.tv_usec-mid.tv_usec)));
     fprintf(stderr, "aggregate %.2f MB/s\n", (double)transfer_size / (int)((wait.tv_sec-start.tv_sec)*1000000ULL+(wait.tv_usec-start.tv_usec)));
     	
     	
