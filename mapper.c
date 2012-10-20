@@ -94,6 +94,7 @@ inline void CopyLinear(struct DmaControlBlock *pCB,
 
 			if (source_end - source_start > 1)
 				fprintf(stderr, "\tstraddles %ld pages\n", source_end - source_start);
+			MY_ASSERT(0);
 		}
 	}
 
@@ -107,6 +108,7 @@ inline void CopyLinear(struct DmaControlBlock *pCB,
 
 		if (dest_end - dest_start > 1)
 				fprintf(stderr, "\tstraddles %ld pages\n", dest_end - dest_start);
+		MY_ASSERT(0);
 	}
 
 	pCB->m_transferInfo = (srcInc << 8) | (1 << 4) | (5 << 12) | (1 << 9) | (1 << 5);
@@ -183,14 +185,20 @@ int main(int argc, char **argv)
     
     err = ioctl(fileno(f), DMA_PREPARE, address);
     if (err == -1)
+    {
     	fprintf(stderr, "dma prepare err %d\n", errno);
+        MY_ASSERT(0);
+    }
     
     struct timeval mid;
     gettimeofday(&mid, 0);
     
     err = ioctl(fileno(f), DMA_KICK, address);
     if (err == -1)
+    {
     	fprintf(stderr, "dma kick err %d\n", errno);
+        MY_ASSERT(0);
+    }
 
 //    time_t end = clock();
     
