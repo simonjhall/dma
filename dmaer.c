@@ -106,6 +106,11 @@ struct DmaControlBlock
 //used to define the size for the CMA-based allocation *in pages*, can only be done once once the file is opened
 #define DMA_CMA_SET_SIZE	_IOW(DMA_MAGIC, 10, unsigned long)
 
+//used to get the version of the module, to test for a capability
+#define DMA_GET_VERSION		_IO(DMA_MAGIC, 99)
+
+#define VERSION_NUMBER 1
+
 #define VIRT_TO_BUS_CACHE_SIZE 8
 
 /***** FILE OPS *****/
@@ -332,10 +337,10 @@ static int Release(struct inode *pInode, struct file *pFile)
 	{
 		PRINTK(KERN_DEBUG "unlocking vc memory\n");
 		if (UnlockVcMemory(g_cmaHandle))
-			PRINK(KERN_ERR "uh-oh, unable to unlock vc memory!\n");
+			PRINTK(KERN_ERR "uh-oh, unable to unlock vc memory!\n");
 		PRINTK(KERN_DEBUG "releasing vc memory\n");
 		if (ReleaseVcMemory(g_cmaHandle))
-			PRINK(KERN_ERR "uh-oh, unable to release vc memory!\n");
+			PRINTK(KERN_ERR "uh-oh, unable to release vc memory!\n");
 	}
 
 	if (iminor(pInode) == 0)
@@ -484,6 +489,7 @@ static long Ioctl(struct file *pFile, unsigned int cmd, unsigned long arg)
 			struct DmaControlBlock __user *pUCB = (struct DmaControlBlock *)arg;
 			int steps = 0;
 			unsigned long start_time = jiffies;
+			(void)start_time;
 
 			//flush our address cache
 			FlushAddrCache();
@@ -540,7 +546,7 @@ static long Ioctl(struct file *pFile, unsigned int cmd, unsigned long arg)
 		break;
 	case DMA_CMA_SET_SIZE:
 	{
-		unsigned int __iomem *pBusAddr;
+		unsigned int pBusAddr;
 
 		if (g_cmaHandle)
 		{
@@ -568,9 +574,11 @@ static long Ioctl(struct file *pFile, unsigned int cmd, unsigned long arg)
 			g_cmaHandle = 0;
 		}
 
-		PRINTK(KERN_INFO "bus address for CMA memory is %p\n", pBusAddr);
+		PRINTK(KERN_INFO "bus address for CMA memory is %x\n", pBusAddr);
 		return pBusAddr;
 	}
+	case DMA_GET_VERSION:
+		return VERSION_NUMBER;
 	default:
 		PRINTK(KERN_DEBUG "unknown ioctl: %d\n", cmd);
 		return -EINVAL;

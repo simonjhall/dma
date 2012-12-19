@@ -311,7 +311,7 @@ unsigned int ExecuteVcCode(unsigned int code,
 		return msg.m_tag.m_args.m_return;
 	else
 	{
-		printk(KERN_ERR "failed to unlock vc memory: s=%d response=%08x recv data size=%08x\n",
+		printk(KERN_ERR "failed to execute: s=%d response=%08x recv data size=%08x\n",
 				s, msg.m_response, msg.m_tag.m_recvDataSize);
 		return 1;
 	}
