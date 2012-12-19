@@ -578,6 +578,7 @@ static long Ioctl(struct file *pFile, unsigned int cmd, unsigned long arg)
 		return pBusAddr;
 	}
 	case DMA_GET_VERSION:
+		PRINTK(KERN_DEBUG "returning version number, %d\n", VERSION_NUMBER);
 		return VERSION_NUMBER;
 	default:
 		PRINTK(KERN_DEBUG "unknown ioctl: %d\n", cmd);
