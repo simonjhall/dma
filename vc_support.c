@@ -25,6 +25,55 @@
 #endif
 
 /****** VC MAILBOX FUNCTIONALITY ******/
+unsigned int QpuEnable(bool e)
+{
+	struct vc_msg
+	{
+		unsigned int m_msgSize;
+		unsigned int m_response;
+
+		struct vc_tag
+		{
+			unsigned int m_tagId;
+			unsigned int m_sendBufferSize;
+			unsigned int m_sendDataSize;
+
+			struct args
+			{
+				unsigned int m_enable;
+			} m_args;
+		} m_tag;
+		unsigned int m_endTag;
+	} msg;
+	int s;
+
+	msg.m_msgSize = sizeof(msg);
+	msg.m_response = 0;
+	msg.m_endTag = 0;
+
+	//the enable/disable tag
+	msg.m_tag.m_tagId = 0x30012;
+	msg.m_tag.m_sendBufferSize = 4;
+	msg.m_tag.m_sendDataSize = 4;
+
+	//which option we want
+	msg.m_tag.m_args.m_enable = e;
+
+	 //run the command
+        s = bcm_mailbox_property(&msg, sizeof(msg));
+
+        if (s == 0 && msg.m_response == 0x80000000)
+	{
+		printk(KERN_DEBUG "qpu %s\n", e ? "ENABLED" : "DISABLED");
+		return 0;
+	}
+	else
+	{
+		printk(KERN_ERR "failed to toggle qpu state\n");
+		return 1;
+	}
+}
+
 unsigned int AllocateVcMemory(unsigned int *pHandle, unsigned int size, unsigned int alignment, unsigned int flags)
 {
 	struct vc_msg

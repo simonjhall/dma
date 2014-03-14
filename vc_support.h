@@ -58,6 +58,8 @@ enum {
    MEM_FLAG_HINT_PERMALOCK = 1 << 6, /* Likely to be locked for long periods of time. */
 };
 
+unsigned int QpuEnable(bool e);
+
 unsigned int AllocateVcMemory(unsigned int *pHandle, unsigned int size, unsigned int alignment, unsigned int flags);
 unsigned int ReleaseVcMemory(unsigned int handle);
 unsigned int LockVcMemory(unsigned int *pBusAddress, unsigned int handle);
